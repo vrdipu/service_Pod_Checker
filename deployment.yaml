@@ -11,8 +11,9 @@ metadata:
   name: pod-reader
 rules:
 - apiGroups: [""]
-  resources: ["pods", "services"]
+  resources: ["pods", "pods/log", "services"]
   verbs: ["get", "list", "watch"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -47,7 +48,7 @@ spec:
       initContainers:
       - name: init-permissions
         image: busybox
-        command: ['sh', '-c', 'cp /config/service-script.sh /tmp/service-script.sh && cp /config/kubectl-script.sh /tmp/kubectl-script.sh && chmod +x /tmp/service-script.sh /tmp/kubectl-script.sh']
+        command: ['sh', '-c', 'cp /config/service-script.sh /tmp/service-script.sh && cp /config/kubectl-script.sh /tmp/kubectl-script.sh && cp /config/log-script.sh /tmp/log-script.sh && chmod +x /tmp/service-script.sh /tmp/kubectl-script.sh /tmp/log-script.sh']
         volumeMounts:
         - name: config-volume
           mountPath: /config
@@ -75,6 +76,14 @@ spec:
       - name: kubectl
         image: bitnami/kubectl:latest
         command: ['sh', '-c', '/tmp/kubectl-script.sh']
+        volumeMounts:
+        - name: script-volume
+          mountPath: /tmp
+        - name: html-volume
+          mountPath: /usr/share/nginx/html
+      - name: log-checker
+        image: bitnami/kubectl:latest
+        command: ['sh', '-c', '/tmp/log-script.sh']
         volumeMounts:
         - name: script-volume
           mountPath: /tmp
@@ -131,6 +140,21 @@ data:
       check_pods
       sleep 5
     done
+  log-script.sh: |
+    #!/bin/sh
+    logs_output="/usr/share/nginx/html/logs-status"
+
+    check_logs() {
+      for pod in $(kubectl get pods -n default -o jsonpath="{.items[*].metadata.name}"); do
+        kubectl logs $pod -n default 2>&1  >> $logs_output
+      done
+    }
+
+    while true; do
+      echo "Checking logs at $(date)" > $logs_output
+      check_logs
+      sleep 5
+    done
   index.html: |
     <!DOCTYPE html>
     <html lang="en">
@@ -185,6 +209,10 @@ data:
                 <h2>Services</h2>
                 <pre id="services-status"></pre>
             </div>
+            <div class="status-section">
+                <h2>Logs</h2>
+                <pre id="logs-status"></pre>
+            </div>
         </div>
         <script>
             async function fetchStatus() {
@@ -195,6 +223,10 @@ data:
                 const servicesResponse = await fetch('/services-status');
                 const servicesText = await servicesResponse.text();
                 document.getElementById('services-status').innerHTML = servicesText;
+
+                const logsResponse = await fetch('/logs-status');
+                const logsText = await logsResponse.text();
+                document.getElementById('logs-status').innerHTML = logsText;
             }
 
             setInterval(fetchStatus, 5000);
