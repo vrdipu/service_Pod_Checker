@@ -11,9 +11,8 @@ metadata:
   name: pod-reader
 rules:
 - apiGroups: [""]
-  resources: ["pods", "pods/log", "services"]
+  resources: ["pods", "services", "pods/log"]
   verbs: ["get", "list", "watch"]
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -48,7 +47,7 @@ spec:
       initContainers:
       - name: init-permissions
         image: busybox
-        command: ['sh', '-c', 'cp /config/service-script.sh /tmp/service-script.sh && cp /config/kubectl-script.sh /tmp/kubectl-script.sh && cp /config/log-script.sh /tmp/log-script.sh && chmod +x /tmp/service-script.sh /tmp/kubectl-script.sh /tmp/log-script.sh']
+        command: ['sh', '-c', 'cp /config/service-script.sh /tmp/service-script.sh && cp /config/kubectl-script.sh /tmp/kubectl-script.sh && cp /config/log-script.sh /tmp/log-script.sh && cp /config/non-running-script.sh /tmp/non-running-script.sh && chmod +x /tmp/service-script.sh /tmp/kubectl-script.sh /tmp/log-script.sh /tmp/non-running-script.sh']
         volumeMounts:
         - name: config-volume
           mountPath: /config
@@ -84,6 +83,14 @@ spec:
       - name: log-checker
         image: bitnami/kubectl:latest
         command: ['sh', '-c', '/tmp/log-script.sh']
+        volumeMounts:
+        - name: script-volume
+          mountPath: /tmp
+        - name: html-volume
+          mountPath: /usr/share/nginx/html
+      - name: non-running-checker
+        image: bitnami/kubectl:latest
+        command: ['sh', '-c', '/tmp/non-running-script.sh']
         volumeMounts:
         - name: script-volume
           mountPath: /tmp
@@ -146,13 +153,26 @@ data:
 
     check_logs() {
       for pod in $(kubectl get pods -n default -o jsonpath="{.items[*].metadata.name}"); do
-        kubectl logs $pod -n default 2>&1  >> $logs_output
+        kubectl logs $pod -n default 2>&1 | grep -i "error\|fail" >> $logs_output
       done
     }
 
     while true; do
       echo "Checking logs at $(date)" > $logs_output
       check_logs
+      sleep 5
+    done
+  non-running-script.sh: |
+    #!/bin/sh
+    non_running_output="/usr/share/nginx/html/non-running-pods"
+
+    check_non_running_pods() {
+      kubectl get pods -n default -o jsonpath="{range .items[*]}{.metadata.name}{' '}{.status.phase}{' '}{.status.reason}{'\n'}{end}" | awk '{ if($2 != "Running") print "<span style=\"color:red\">Pod: " $1 ", Status: " $2 ", Reason: " $3 "</span>"; }' >> $non_running_output
+    }
+
+    while true; do
+      echo "Checking non-running pods at $(date)" > $non_running_output
+      check_non_running_pods
       sleep 5
     done
   index.html: |
@@ -213,6 +233,10 @@ data:
                 <h2>Logs</h2>
                 <pre id="logs-status"></pre>
             </div>
+            <div class="status-section">
+                <h2>Non-Running Pods</h2>
+                <pre id="non-running-pods"></pre>
+            </div>
         </div>
         <script>
             async function fetchStatus() {
@@ -227,6 +251,10 @@ data:
                 const logsResponse = await fetch('/logs-status');
                 const logsText = await logsResponse.text();
                 document.getElementById('logs-status').innerHTML = logsText;
+
+                const nonRunningResponse = await fetch('/non-running-pods');
+                const nonRunningText = await nonRunningResponse.text();
+                document.getElementById('non-running-pods').innerHTML = nonRunningText;
             }
 
             setInterval(fetchStatus, 5000);
@@ -234,6 +262,7 @@ data:
         </script>
     </body>
     </html>
+
 ---
 apiVersion: v1
 kind: Service
