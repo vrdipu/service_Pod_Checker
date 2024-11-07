@@ -167,11 +167,17 @@ data:
     non_running_output="/usr/share/nginx/html/non-running-pods"
 
     check_non_running_pods() {
-      kubectl get pods -n default -o jsonpath="{range .items[*]}{.metadata.name}{' '}{.status.phase}{' '}{.status.reason}{'\n'}{end}" | awk '{ if($2 != "Running") print "<span style=\"color:red\">Pod: " $1 ", Status: " $2 ", Reason: " $3 "</span>"; }' >> $non_running_output
+      echo "Checking non-running pods at $(date)" > $non_running_output
+      for pod in $(kubectl get pods -n default -o jsonpath="{.items[*].metadata.name}"); do
+        status=$(kubectl get pod $pod -n default -o jsonpath="{.status.phase}")
+        if [ "$status" != "Running" ]; then
+          reason=$(kubectl describe pod $pod -n default | grep -m 1 "Reason:" | awk '{print $2}')
+          echo "<span style='color:red'>Pod: $pod, Status: $status, Reason: $reason</span>" >> $non_running_output
+        fi
+      done
     }
 
     while true; do
-      echo "Checking non-running pods at $(date)" > $non_running_output
       check_non_running_pods
       sleep 5
     done
