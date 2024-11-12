@@ -172,7 +172,12 @@ data:
         status=$(kubectl get pod $pod -n default -o jsonpath="{.status.phase}")
         if [ "$status" != "Running" ]; then
           reason=$(kubectl describe pod $pod -n default | grep -m 1 "Reason:" | awk '{print $2}')
-          echo "<span style='color:red'>Pod: $pod, Status: $status, Reason: $reason</span>" >> $non_running_output
+          if [ "$reason" == "ImagePullBackOff" ] || [ "$reason" == "ErrImagePull" ]; then
+            image=$(kubectl get pod $pod -n default -o jsonpath="{..image}" | tr ' ' '\n' | tail -n 1)
+            echo "<span style='color:red'>Pod: $pod, Status: $status, Reason: $reason, Image: $image</span>" >> $non_running_output
+          else
+            echo "<span style='color:red'>Pod: $pod, Status: $status, Reason: $reason</span>" >> $non_running_output
+          fi
         fi
       done
     }
@@ -194,11 +199,20 @@ data:
                 margin: 0;
                 padding: 0;
                 background-color: #f4f4f4;
+                display: flex;
             }
             .container {
-                width: 80%;
-                margin: 0 auto;
+                width: 100%; /* Adjusted from 70% to 100% */
+                margin: 0;
                 padding: 20px;
+            }
+            .sidebar {
+                width: 30%;
+                background-color: #fff;
+                padding: 20px;
+                border-left: 1px solid #ddd;
+                box-shadow: -1px 0 10px rgba(0, 0, 0, 0.1);
+                display: none; /* Initially hide the sidebar */
             }
             h1 {
                 text-align: center;
@@ -222,6 +236,21 @@ data:
                 max-height: 200px; /* Adjust height as needed */
                 overflow-y: auto;
             }
+            .banner {
+                position: fixed;
+                bottom: 0;
+                width: 100%;
+                background-color: red;
+                color: white;
+                text-align: center;
+                padding: 10px 0;
+                font-size: 1.2em;
+                animation: marquee 10s linear infinite;
+            }
+            @keyframes marquee {
+                0% { transform: translateX(100%); }
+                100% { transform: translateX(-100%); }
+            }
         </style>
     </head>
     <body>
@@ -244,25 +273,76 @@ data:
                 <pre id="non-running-pods"></pre>
             </div>
         </div>
+        <div class="sidebar" id="sidebar">
+            <h2>Suggested Resolution</h2>
+            <pre id="resolution"></pre>
+        </div>
+        <div id="error-banner" class="banner" style="display: none;">Errors Detected: <span id="error-details"></span></div>
         <script>
             async function fetchStatus() {
                 const podsResponse = await fetch('/pods-status');
                 const podsText = await podsResponse.text();
                 document.getElementById('pods-status').innerHTML = podsText;
-
+    
                 const servicesResponse = await fetch('/services-status');
                 const servicesText = await servicesResponse.text();
                 document.getElementById('services-status').innerHTML = servicesText;
-
+    
                 const logsResponse = await fetch('/logs-status');
                 const logsText = await logsResponse.text();
                 document.getElementById('logs-status').innerHTML = logsText;
-
+    
                 const nonRunningResponse = await fetch('/non-running-pods');
                 const nonRunningText = await nonRunningResponse.text();
                 document.getElementById('non-running-pods').innerHTML = nonRunningText;
+    
+                checkForErrors(podsText, servicesText, logsText, nonRunningText);
             }
-
+    
+            function checkForErrors(podsText, servicesText, logsText, nonRunningText) {
+                const errorDetails = [];
+                const resolutionDetails = [];
+                let hasIssues = false;
+    
+                if (podsText.includes('ImagePullBackOff') || servicesText.includes('Failure') || logsText.includes('ImagePullBackOff') || nonRunningText.includes('red')) {
+                    hasIssues = true;
+                    if (podsText.includes('ImagePullBackOff')) {
+                        errorDetails.push('Pod Errors Detected');
+                        resolutionDetails.push('Possible solutions: Check the image name, repository, and tag.');
+                    }
+                    if (servicesText.includes('Failure')) {
+                        errorDetails.push('Service Failures Detected');
+                        resolutionDetails.push('Possible solutions: Verify the service endpoints and network connectivity.');
+                    }
+                    if (logsText.includes('ImagePullBackOff')) {
+                        errorDetails.push('Error Logs Found');
+                        resolutionDetails.push('Possible solutions: Investigate the log details for specific errors.');
+                    }
+                    if (nonRunningText.includes('red')) {
+                        errorDetails.push('Non-Running Pods Detected');
+                        const podLines = nonRunningText.split('\n');
+                        podLines.forEach(line => {
+                            if (line.includes('ImagePullError') || line.includes('ImagePullBackOff') || line.includes('ErrImagePull')) {
+                                const podName = line.match(/Pod:\s(\S+),/)[1];
+                                const image = line.match(/Image:\s(\S+)/)[1];
+                                const [repository, tag] = image.split(':');
+                                resolutionDetails.push(`Pod: ${podName}, Image: ${image}, Repository: ${repository}, Tag: ${tag} - Suggested by engineer Dipu`);
+                            }
+                        });
+                    }
+                }
+    
+                if (hasIssues) {
+                    document.getElementById('error-banner').style.display = 'block';
+                    document.getElementById('error-details').innerHTML = errorDetails.join(', ');
+                    document.getElementById('resolution').innerHTML = resolutionDetails.join('\n');
+                    document.getElementById('sidebar').style.display = 'block';
+                } else {
+                    document.getElementById('error-banner').style.display = 'none';
+                    document.getElementById('sidebar').style.display = 'none';
+                }
+            }
+    
             setInterval(fetchStatus, 5000);
             fetchStatus();
         </script>
